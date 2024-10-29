@@ -31,7 +31,9 @@ transforms and the postprocessing transforms.
 
 The context manager adds instrumentation to the module and transforms that
 replaces the `forward` method (or `__call__` if the former is not present) that
-times the actual execution of the module at hand.
+times the actual execution of the module at hand. It does not execute any of the
+transforms or do any inference on the model itself, this is assumed to happen
+within the active context.
 
 After the context manager is released, the timing data is accumulated and can be
 summarized by using methods `summarize_table` and `summarize_tree`.
