@@ -1,6 +1,8 @@
+from pathlib import Path
+from typing import List, Sequence, Tuple
+
 import torch
 from PIL import Image, ImageDraw
-from pathlib import Path
 
 COCO_INSTANCE_CATEGORY_NAMES = [
     '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
@@ -19,11 +21,34 @@ COCO_INSTANCE_CATEGORY_NAMES = [
 
 
 class BoundBoxPostProcessor(torch.nn.Module):
+    """Postprocessing module that draws bounding boxes on images."""
+
     def __init__(self):
         super().__init__()
 
-    def forward(self, images, paths, predictions):
-        out_images = []
+    def forward(self,
+                images: torch.Tensor,
+                paths: Sequence[str],
+                predictions: Sequence[dict]
+                ) -> List[Tuple[str, Image.Image]]:
+        """
+        Draw bounding boxes on the images.
+
+        Parameters
+        ----------
+        images : torch.Tensor
+            Image batch as output by the model.
+        paths : Sequence[str]
+            The paths to the input images.
+        predictions : Sequence[dict]
+            The model predictions.
+
+        Returns
+        -------
+        List[Tuple[str, Image.Image]]
+            A list of tuples containing the output image paths and the images with bounding boxes drawn.
+        """
+        out_images: List[Tuple[str, Image.Image]] = []
         for image, path, prediction in zip(images, paths, predictions):
             # Draw bounding boxes on the image
 

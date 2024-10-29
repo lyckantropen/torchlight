@@ -1,9 +1,14 @@
+from typing import Optional, Sequence
+
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
 
 class FileListDataset(Dataset):
-    def __init__(self, image_paths, transform=None):
+    """Dataset that loads images from a list of file paths."""
+
+    def __init__(self, image_paths: Sequence[str], transform: Optional[torch.nn.Module] = None) -> None:
         self.image_paths = image_paths
         self.transform = transform
 

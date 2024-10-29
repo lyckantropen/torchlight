@@ -12,18 +12,45 @@ from .forward_timer import ForwardTimer
 
 @dataclass
 class ModuleTimingAtom:
+    """Stores data about a module's timing and all its children."""
+
     name: str
     class_: str
     level: int
     times: List[float] = field(default_factory=list)
     children: List[ModuleTimingAtom] = field(default_factory=list)
-    child_time: np.float32 = np.float32(0.0)
-    self_time: np.float32 = np.float32(0.0)
-    total_time: np.float32 = np.float32(0.0)
+    child_time: np.float32 = np.float32(0.0)  # time spent in children
+    self_time: np.float32 = np.float32(0.0)   # time spent in the module itself (total - children)
+    total_time: np.float32 = np.float32(0.0)  # total time spent in the module
 
 
 class ModelTiming:
-    def __init__(self, model: torch.nn.Module, pre_transforms: Sequence[torch.nn.Module], post_transforms: Sequence[torch.nn.Module]) -> None:
+    """
+    Context manager for timing a model and its transforms.
+
+    This class replaces the forward or __call__ methods of a model and
+    preprocess and postprocess transforms with wrappers. After the context
+    manager exits, the timing data can be accessed from the `timing_data`
+    attribute and the model will be restored to its original state.
+    """
+
+    def __init__(self,
+                 model: torch.nn.Module,
+                 pre_transforms: Sequence[torch.nn.Module],
+                 post_transforms: Sequence[torch.nn.Module]
+                 ) -> None:
+        """
+        Initialize the ModelTiming context manager.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            The model to time.
+        pre_transforms : Sequence[torch.nn.Module]
+            The transforms to time before the model.
+        post_transforms : Sequence[torch.nn.Module]
+            The transforms to time after the model.
+        """
         self.model = model
         self.pre_transforms = pre_transforms
         self.post_transforms = post_transforms
@@ -44,6 +71,7 @@ class ModelTiming:
                                        root_container: ModuleTimingAtom,
                                        forward_timers: List[ForwardTimer],
                                        level: int = 0) -> None:
+        """Add instrumentation (timing wrappers) to a sequence of transforms."""
         for transform in transforms:
             transform_timing_data = ModuleTimingAtom(transform.__class__.__name__, transform.__class__.__name__, level + 1, [], [])
             root_container.children.append(transform_timing_data)
@@ -64,6 +92,7 @@ class ModelTiming:
                              name: str = "",
                              level: int = 0
                              ) -> None:
+        """Add instrumentation (timing wrappers) to a module and its children."""
         if hasattr(module, 'named_children'):
             for name, child in module.named_children():
                 child_timing_data = ModuleTimingAtom(name, child.__class__.__name__, level+1, [], [])
@@ -84,6 +113,7 @@ class ModelTiming:
 
     @classmethod
     def _summarize_times(cls, module_timing: ModuleTimingAtom) -> np.float32:
+        """Summarize the times of a module and its children."""
         child_times = np.array([cls._summarize_times(child) for child in module_timing.children], np.float32)
 
         module_timing.child_time = np.sum(child_times) if len(child_times) > 0 else np.float32(0.0)
@@ -96,16 +126,19 @@ class ModelTiming:
         return module_timing.total_time
 
     def __enter__(self) -> ModelTiming:
+        """Context manager entry point - enable all timing wrappers."""
         for forward_timer in self.forward_timers:
             forward_timer.enable()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Context manager exit point - disable all timing wrappers and summarize the times."""
         for forward_timer in self.forward_timers:
             forward_timer.disable()
         self.timing_data.total_time = self._summarize_times(self.timing_data)
 
     def _flat_timing_data(self) -> List[Dict[str, Any]]:
+        """Flatten the timing data into a list of dictionaries."""
         flat_timing_data = []
         stack = [self.timing_data]
         while stack:
@@ -123,12 +156,14 @@ class ModelTiming:
         return flat_timing_data
 
     def summarize_table(self, sort_by='self_mean_time[ms]', limit: Optional[int] = None) -> str:
+        """Summarize the timing data in a tabular format."""
         data = sorted(self._flat_timing_data(), key=lambda x: x[sort_by], reverse=True)
         if limit is not None:
             data = data[:limit]
         return tabulate(data, headers='keys')
 
     def summarize_tree(self) -> str:
+        """Summarize the timing data in a tree format."""
         def print_structure(s: ModuleTimingAtom, level: int = 0) -> str:
             repr = ''.join([". "] * level) + s.name + f' ({s.class_})' + f" took {s.total_time * 1000:.2f}ms (self: {s.self_time * 1000:.2f}ms)\n"
             for child in s.children:
