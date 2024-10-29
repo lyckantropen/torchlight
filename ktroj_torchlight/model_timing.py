@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -17,7 +17,7 @@ class ModuleTimingAtom:
     level: int
     times: List[float] = field(default_factory=list)
     children: List[ModuleTimingAtom] = field(default_factory=list)
-    cumulative_time: np.float32 = np.float32(0.0)
+    child_time: np.float32 = np.float32(0.0)
     self_time: np.float32 = np.float32(0.0)
     total_time: np.float32 = np.float32(0.0)
 
@@ -86,13 +86,13 @@ class ModelTiming:
     def _summarize_times(cls, module_timing: ModuleTimingAtom) -> np.float32:
         child_times = np.array([cls._summarize_times(child) for child in module_timing.children], np.float32)
 
-        module_timing.cumulative_time = np.sum(child_times) if len(child_times) > 0 else np.float32(0.0)
+        module_timing.child_time = np.sum(child_times) if len(child_times) > 0 else np.float32(0.0)
         if len(module_timing.times) > 0:
-            module_timing.self_time = np.mean(module_timing.times) - module_timing.cumulative_time
+            module_timing.self_time = np.mean(module_timing.times) - module_timing.child_time
             module_timing.total_time = np.mean(module_timing.times)
         else:
             module_timing.self_time = np.float32(0.0)
-            module_timing.total_time = module_timing.cumulative_time
+            module_timing.total_time = module_timing.child_time
         return module_timing.total_time
 
     def __enter__(self) -> ModelTiming:
@@ -113,20 +113,24 @@ class ModelTiming:
             flat_timing_data.append({
                 'name': current.name,
                 'class': current.class_,
-                'total_time[ms]': current.total_time * 1000,
-                'cumulative_time[ms]': current.cumulative_time * 1000,
-                'self_time[ms]': current.self_time * 1000
+                'total_mean_time[ms]': current.total_time * 1000,
+                'child_mean_time[ms]': current.child_time * 1000,
+                'self_mean_time[ms]': current.self_time * 1000,
+                'times_run': len(current.times)
             })
             for child in current.children:
                 stack.append(child)
         return flat_timing_data
 
-    def summarize_table(self, sort_by='self_time[ms]') -> str:
-        return tabulate(sorted(self._flat_timing_data(), key=lambda x: x[sort_by], reverse=True), headers='keys')
+    def summarize_table(self, sort_by='self_mean_time[ms]', limit: Optional[int] = None) -> str:
+        data = sorted(self._flat_timing_data(), key=lambda x: x[sort_by], reverse=True)
+        if limit is not None:
+            data = data[:limit]
+        return tabulate(data, headers='keys')
 
     def summarize_tree(self) -> str:
         def print_structure(s: ModuleTimingAtom, level: int = 0) -> str:
-            repr = ''.join([". "] * level) + s.name + f' ({s.class_})' + f" took {s.total_time * 1000:.2f} ms (self: {s.self_time * 1000:.2f} ms)\n"
+            repr = ''.join([". "] * level) + s.name + f' ({s.class_})' + f" took {s.total_time * 1000:.2f}ms (self: {s.self_time * 1000:.2f}ms)\n"
             for child in s.children:
                 repr += print_structure(child, level + 1)
             return repr

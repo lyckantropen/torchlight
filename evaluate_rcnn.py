@@ -20,28 +20,31 @@ post_transforms = [BoundBoxPostProcessor()]
 dataset = FileListDataset(image_paths, transform=transform)
 dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+devices = ['cpu']
+if torch.cuda.is_available():
+    devices.append('cuda')
 
 model = fasterrcnn_resnet50_fpn(pretrained=True)
-model = model.to(device)
-model.eval()
 
+for device in devices:
+    print(f'Running on {device}')
+    model = model.to(device)
+    model.eval()
 
-with ModelTiming(model, pre_transforms=transform.transforms, post_transforms=post_transforms) as timing:
-    for images, paths in dataloader:
-        images = images.to(device)
-        for _ in range(10):
-            predictions = model(images)
+    with ModelTiming(model, pre_transforms=transform.transforms, post_transforms=post_transforms) as timing:
+        for images, paths in dataloader:
+            images = images.to(device)
+            for _ in range(10):
+                predictions = model(images)
 
-            torch.cpu.synchronize()
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+                torch.cpu.synchronize()
+                if device == 'cuda':
+                    torch.cuda.synchronize()
 
-        for post_transform in post_transforms:
-            out_images = post_transform(images, paths, predictions)
-            print(out_images)
+            for post_transform in post_transforms:
+                out_images = post_transform(images, paths, predictions)
+                print(out_images)
 
-
-print(f'Model time: {timing.timing_data.total_time}')
-print(timing.summarize_table())
-print(timing.summarize_tree())
+    print(f'Pipeline time: {timing.timing_data.total_time * 1000:.2f}ms')
+    print(timing.summarize_table(limit=20))
+    print(timing.summarize_tree())
