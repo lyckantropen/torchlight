@@ -75,13 +75,17 @@ class ModelTiming:
         for transform in transforms:
             transform_timing_data = ModuleTimingAtom(transform.__class__.__name__, transform.__class__.__name__, level + 1, [], [])
             root_container.children.append(transform_timing_data)
+
             forward_timer = ForwardTimer(transform, transform_timing_data.times)
+
+            # replace the forward method of the transform
             if hasattr(transform, 'forward'):
                 transform.forward = forward_timer
             elif hasattr(transform, '__call__'):
                 transform.__call__ = forward_timer
             else:
                 raise ValueError(f"Transform {transform.__class__.__name__} does not have a forward method")
+
             forward_timers.append(forward_timer)
 
     @classmethod
@@ -97,15 +101,20 @@ class ModelTiming:
             for name, child in module.named_children():
                 child_timing_data = ModuleTimingAtom(name, child.__class__.__name__, level+1, [], [])
                 cls._add_instrumentation(child, child_timing_data, forward_timers, name, level+1)
+
                 forward_timer = ForwardTimer(child, child_timing_data.times)
+
+                # replace the forward method of the transform
                 if hasattr(child, 'forward'):
                     child.forward = forward_timer
                 elif hasattr(child, '__call__'):
                     child.__call__ = forward_timer
                 else:
                     raise ValueError(f"Transform {child.__class__.__name__} does not have a forward method")
+
                 forward_timers.append(forward_timer)
                 timing_data.children.append(child_timing_data)
+
         if hasattr(module, 'forward'):
             module.forward = ForwardTimer(module, timing_data.times)
         elif hasattr(module, '__call__'):
