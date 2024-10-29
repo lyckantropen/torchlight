@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence
 
@@ -24,12 +23,38 @@ class ModuleTimingAtom:
 
 
 class ModelTiming:
-    def __init__(self, model: torch.nn.Module) -> None:
+    def __init__(self, model: torch.nn.Module, pre_transforms: Sequence[torch.nn.Module], post_transforms: Sequence[torch.nn.Module]) -> None:
         self.model = model
+        self.pre_transforms = pre_transforms
+        self.post_transforms = post_transforms
         self.forward_timers: List[ForwardTimer] = []
-        self.timing_data = ModuleTimingAtom('Model', self.model.__class__.__name__, 0, [], [])
+        self.timing_data = ModuleTimingAtom('Pipeline', 'PIPELINE', 0, [], [
+            ModuleTimingAtom('Preprocessing', 'PREPROCESSING', 0, [], []),
+            ModuleTimingAtom('Model', self.model.__class__.__name__, 0, [], []),
+            ModuleTimingAtom('Postprocessing', 'POSTPROCESSING', 0, [], []),
+        ])
 
-        self._add_instrumentation(self.model, self.timing_data, self.forward_timers)
+        self._add_instrumentation(self.model, self.timing_data.children[1], self.forward_timers)
+        self._add_instrumentation_transform(self.pre_transforms, self.timing_data.children[0], self.forward_timers)
+        self._add_instrumentation_transform(self.post_transforms, self.timing_data.children[2], self.forward_timers)
+
+    @classmethod
+    def _add_instrumentation_transform(cls,
+                                       transforms: Sequence[torch.nn.Module],
+                                       root_container: ModuleTimingAtom,
+                                       forward_timers: List[ForwardTimer],
+                                       level: int = 0) -> None:
+        for transform in transforms:
+            transform_timing_data = ModuleTimingAtom(transform.__class__.__name__, transform.__class__.__name__, level + 1, [], [])
+            root_container.children.append(transform_timing_data)
+            forward_timer = ForwardTimer(transform, transform_timing_data.times)
+            if hasattr(transform, 'forward'):
+                transform.forward = forward_timer
+            elif hasattr(transform, '__call__'):
+                transform.__call__ = forward_timer
+            else:
+                raise ValueError(f"Transform {transform.__class__.__name__} does not have a forward method")
+            forward_timers.append(forward_timer)
 
     @classmethod
     def _add_instrumentation(cls,
@@ -39,12 +64,23 @@ class ModelTiming:
                              name: str = "",
                              level: int = 0
                              ) -> None:
-        for name, child in module.named_children():
-            child_timing_data = ModuleTimingAtom(name, child.__class__.__name__, level+1, [], [])
-            cls._add_instrumentation(child, child_timing_data, forward_timers, name, level+1)
-            child.forward = ForwardTimer(child, child_timing_data.times)
-            forward_timers.append(child.forward)
-            timing_data.children.append(child_timing_data)
+        if hasattr(module, 'named_children'):
+            for name, child in module.named_children():
+                child_timing_data = ModuleTimingAtom(name, child.__class__.__name__, level+1, [], [])
+                cls._add_instrumentation(child, child_timing_data, forward_timers, name, level+1)
+                forward_timer = ForwardTimer(child, child_timing_data.times)
+                if hasattr(child, 'forward'):
+                    child.forward = forward_timer
+                elif hasattr(child, '__call__'):
+                    child.__call__ = forward_timer
+                else:
+                    raise ValueError(f"Transform {child.__class__.__name__} does not have a forward method")
+                forward_timers.append(forward_timer)
+                timing_data.children.append(child_timing_data)
+        if hasattr(module, 'forward'):
+            module.forward = ForwardTimer(module, timing_data.times)
+        elif hasattr(module, '__call__'):
+            module.__call__ = ForwardTimer(module, timing_data.times)
 
     @classmethod
     def _summarize_times(cls, module_timing: ModuleTimingAtom) -> np.float32:
@@ -96,17 +132,3 @@ class ModelTiming:
             return repr
 
         return print_structure(self.timing_data)
-
-
-class ModelTimingInner:
-    def __init__(self, timing: ModelTiming) -> None:
-        self.timing = timing
-        self._self_begin = 0.0
-
-    def __enter__(self) -> ModelTimingInner:
-        self._self_begin = time.perf_counter()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        end = time.perf_counter()
-        self.timing.timing_data.times.append(end - self._self_begin)

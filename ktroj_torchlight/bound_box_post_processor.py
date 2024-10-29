@@ -1,48 +1,6 @@
-from pathlib import Path
-
 import torch
 from PIL import Image, ImageDraw
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-from torchvision.models.detection import fasterrcnn_resnet50_fpn
-
-from ktroj_torchlight import ModelTiming, ModelTimingInner
-
-
-class CustomDataset(Dataset):
-    def __init__(self, image_paths, transform=None):
-        self.image_paths = image_paths
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        image = Image.open(img_path).convert("RGB")
-        if self.transform:
-            image = self.transform(image)
-        return image, img_path
-
-
-image_paths = [
-    "test.jpg",
-    "test_2.jpg"
-]
-
-transform = transforms.Compose([
-    transforms.Resize((512, 512)),  # Resize the image to 224x224
-    transforms.ToTensor(),          # Convert the image to a tensor
-])
-
-dataset = CustomDataset(image_paths, transform=transform)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-model = fasterrcnn_resnet50_fpn(pretrained=True)
-model = model.to(device)
-model.eval()
+from pathlib import Path
 
 COCO_INSTANCE_CATEGORY_NAMES = [
     '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
@@ -59,19 +17,16 @@ COCO_INSTANCE_CATEGORY_NAMES = [
     'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
 ]
 
-with ModelTiming(model) as timing:
-    for images, paths in dataloader:
-        images = images.to(device)
-        for _ in range(10):
-            with ModelTimingInner(timing):
-                predictions = model(images)
 
-            torch.cpu.synchronize()
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+class BoundBoxPostProcessor(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
 
+    def forward(self, images, paths, predictions):
+        out_images = []
         for image, path, prediction in zip(images, paths, predictions):
             # Draw bounding boxes on the image
+
             draw_image = Image.open(path).convert("RGB")
             draw = ImageDraw.Draw(draw_image)
             scale_y, scale_x = draw_image.size[1] / image.shape[-2], draw_image.size[0] / image.shape[-1]
@@ -91,7 +46,5 @@ with ModelTiming(model) as timing:
 
             out_path = Path(path).stem + "_targets.jpg"
             draw_image.save(out_path)
-
-print(f'Model time: {timing.timing_data.total_time}')
-print(timing.summarize_table())
-print(timing.summarize_tree())
+            out_images.append((out_path, draw_image))
+        return out_images
